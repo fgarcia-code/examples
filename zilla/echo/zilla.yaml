@@ -1,0 +1,116 @@
+name: example
+bindings:
+  api-server-tcp:
+    type: tcp
+    kind: server
+    options:
+      host: 0.0.0.0
+      port:
+        - 8080
+    routes:
+      - when:
+          - port: 8080
+        exit: api-server-http
+
+  api-server-http:
+    type: http
+    kind: server
+    options:
+      versions:
+        - h2
+      access-control:
+        policy: cross-origin
+    exit: api-server-grpc
+
+  api-server-grpc:
+    type: grpc
+    kind: server
+    options:
+      services:
+        - /proto/echo/echo.proto
+    routes:
+      - when:
+          - method: echo.EchoService/*
+        exit: api-proxy-grpc
+
+  api-proxy-grpc:
+    type: grpc-kafka
+    kind: proxy
+    routes:
+      - when:
+          - method: echo.EchoService/*
+        exit: kafka-cache-client
+        with:
+          capability: produce
+          topic: echo-requests
+          acks: leader_only
+          reply-to: echo-responses
+
+  # Kafka Consumer Client
+  kafka-cache-client:
+    type: kafka
+    kind: cache_client
+    exit: kafka-cache-server
+
+  kafka-cache-server:
+    type: kafka
+    kind: cache_server
+    exit: kafka-client
+
+  kafka-client:
+    type: kafka
+    kind: client
+    exit: kafka-client-tcp
+
+  kafka-client-tcp:
+    type: tcp
+    kind: client
+    options:
+      host: broker01
+      port: 29091
+    routes:
+      - when:
+          - cidr: 0.0.0.0/0
+
+  # gRPC Echo Service
+  echo-remote-server-grpc:
+    type: kafka-grpc
+    kind: remote_server
+    entry: kafka-cache-client
+    options:
+      acks: leader_only
+    routes:
+      - when:
+          - topic: echo-requests
+            reply-to: echo-responses
+            method: echo.EchoService/*
+        with:
+          scheme: http
+          authority: localhost:8080
+        exit: echo-client-grpc
+
+  echo-client-grpc:
+    type: grpc
+    kind: client
+    options:
+      services:
+        - /proto/echo/echo.proto
+    routes:
+      - when:
+          - method: echo.EchoService/*
+        exit: echo-client-http
+
+  echo-client-http:
+    type: http
+    kind: client
+    options:
+      versions:
+        - h2
+    exit: echo-client-tcp
+
+  echo-client-tcp:
+    type: tcp
+    kind: client
+    options:
+      host: grpc-echo
+      port: 5001
